@@ -238,7 +238,7 @@ func main() {
 						if x != leftSpace {
 							outputData += ", "
 						}
-						outputData += fmt.Sprintf("0x%x", color.A)
+						outputData += fmt.Sprintf("0x%x", 255-color.A)
 						currentIndex++
 					}
 					outputData += ",\n"
