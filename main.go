@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strconv"
 
 	"github.com/golang/freetype"
 
@@ -90,16 +91,11 @@ func main() {
 	point := freetype.Pt(0, *fontSize)
 	glyphMetrics := map[rune]glyphInfo{}
 	outputData := ""
+	indexData := ""
+	currentIndex := 0
 
 	if *outputFormat == outputFormatC {
-		outputData += "#include <stdint.h>\n"
-		outputData += "\n"
-		outputData += "#include \"font/font.h\"\n"
-		outputData += "\n"
-		outputData += fmt.Sprintf("// font: %s\n", fontName)
-		outputData += fmt.Sprintf("// size: %d\n", *fontSize)
-		outputData += "const font_t font = {\n"
-		outputData += "\t.characters = {\n"
+		outputData += "\t.data = {\n"
 	}
 
 	for i := 1; i <= int(endChar-startChar)+1; i++ {
@@ -221,28 +217,35 @@ func main() {
 
 			if bitmapWidth > 0 {
 				// get the bitmap
-				outputData += fmt.Sprintf("\t\t// character: %s\n", string(char))
-				outputData += "\t\t{\n"
+				charString := string(char)
+				if charString == "\\" {
+					charString = "backslash"
+				}
+				outputData += fmt.Sprintf("\t\t// character: %s\n", charString)
 
-				outputData += fmt.Sprintf("\t\t\t.metrics = {%d, %d, %d, %d, %d, %d},\n", leftSpace, topSpace, bitmapWidth, bitmapHeight, advanceWidth, advanceHeight)
-				outputData += "\t\t\t.data = {\n"
+				if i != 1 {
+					indexData += ", "
+				}
+				indexData += strconv.Itoa(currentIndex)
+
+				outputData += fmt.Sprintf("\t\t%d, %d, %d, %d, %d, %d,\n", leftSpace, topSpace, bitmapWidth, bitmapHeight, advanceWidth, advanceHeight)
+				currentIndex += 6
+
 				for y := topSpace; y < topSpace+bitmapHeight; y++ {
-					outputData += "\t\t\t\t"
+					outputData += "\t\t"
 					for x := leftSpace; x < leftSpace+bitmapWidth; x++ {
 						color := characterImage.At(x, y).(color.RGBA)
 						if x != leftSpace {
 							outputData += ", "
 						}
 						outputData += fmt.Sprintf("0x%x", color.A)
+						currentIndex++
 					}
 					outputData += ",\n"
 				}
-				outputData += "\t\t\t}\n"
-				outputData += "\t\t}"
 				if i != int(endChar-startChar)+1 {
-					outputData += ",\n"
+					outputData += "\n"
 				}
-				outputData += "\n"
 
 				log.Printf("%d box: (%d, %d, %d, %d)", char, leftSpace, topSpace, bitmapWidth, bitmapHeight)
 			} else {
@@ -286,10 +289,23 @@ func main() {
 			panic(err)
 		}
 	} else if *outputFormat == outputFormatC {
+		headerData := "#include <stdint.h>\n"
+		headerData += "\n"
+		headerData += "#include \"font/font.h\"\n"
+		headerData += "\n"
+		headerData += fmt.Sprintf("// font: %s\n", fontName)
+		headerData += fmt.Sprintf("// size: %d\n", *fontSize)
+		headerData += "const font_t font = {\n"
+		headerData += "\t.indexes = {"
+		headerData += indexData
+		headerData += "},\n"
+
+		outputData = headerData + outputData
+
 		outputData += "\t}\n"
 		outputData += "};\n"
 
-		err = ioutil.WriteFile("atlas.c", []byte(outputData), 0777)
+		err = ioutil.WriteFile("atlas.h", []byte(outputData), 0777)
 		if err != nil {
 			panic(err)
 		}
