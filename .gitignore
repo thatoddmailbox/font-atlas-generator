@@ -1,3 +1,5 @@
 *.ttf
 *.png
 *.json
+*.c
+*.h

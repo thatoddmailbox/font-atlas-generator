@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"image"
+	"image/color"
+	"image/draw"
 	"image/png"
 	"io/ioutil"
 	"log"
@@ -18,6 +20,11 @@ import (
 	"golang.org/x/image/math/fixed"
 )
 
+const (
+	outputFormatPNG = "png"
+	outputFormatC   = "c"
+)
+
 type glyphInfo struct {
 	AdvanceWidth  int
 	AdvanceHeight int
@@ -27,11 +34,16 @@ func main() {
 	fontPath := flag.String("font-path", "", "The path to the TrueType font to use.")
 	fontSize := flag.Int("font-size", 16, "The size, in points, of the font.")
 	dpi := flag.Float64("dpi", 72, "The screen resolution to use, in dots per inch.")
+	outputFormat := flag.String("output-format", "png", "The output format. (either 'png' or 'c')")
 
 	flag.Parse()
 
 	if *fontPath == "" {
 		log.Fatalln("Missing font-path flag.")
+	}
+
+	if *outputFormat != outputFormatPNG && *outputFormat != outputFormatC {
+		log.Fatalf("Invalid output-format flag.")
 	}
 
 	fontData, err := ioutil.ReadFile(*fontPath)
@@ -57,7 +69,9 @@ func main() {
 	context.SetHinting(font.HintingFull)
 	context.SetSrc(image.Black)
 
-	log.Printf("Creating font atlas for '%s' (%s)", ttfFont.Name(truetype.NameIDFontFamily), ttfFont.Name(truetype.NameIDFontSubfamily))
+	fontName := ttfFont.Name(truetype.NameIDFontFamily)
+
+	log.Printf("Creating font atlas for '%s' (%s)", fontName, ttfFont.Name(truetype.NameIDFontSubfamily))
 
 	atlasImage := image.NewRGBA(image.Rect(0, 0, 512, 256))
 
@@ -65,7 +79,7 @@ func main() {
 	context.SetDst(atlasImage)
 
 	startChar := '!'
-	endChar := '|'
+	endChar := '~'
 	charWidth := 32
 	charHeight := 32
 	rowSize := atlasImage.Bounds().Size().X / charWidth
@@ -75,6 +89,18 @@ func main() {
 	scale := context.PointToFixed(float64(*fontSize))
 	point := freetype.Pt(0, *fontSize)
 	glyphMetrics := map[rune]glyphInfo{}
+	outputData := ""
+
+	if *outputFormat == outputFormatC {
+		outputData += "#include <stdint.h>\n"
+		outputData += "\n"
+		outputData += "#include \"font/font.h\"\n"
+		outputData += "\n"
+		outputData += fmt.Sprintf("// font: %s\n", fontName)
+		outputData += fmt.Sprintf("// size: %d\n", *fontSize)
+		outputData += "const font_t font = {\n"
+		outputData += "\t.characters = {\n"
+	}
 
 	for i := 1; i <= int(endChar-startChar)+1; i++ {
 		char := startChar + rune(i-1)
@@ -99,15 +125,140 @@ func main() {
 		// draw.Draw(atlasImage, image.Rect(point.X.Floor(), startY-glyphHeight, point.X.Floor()+glyphWidth, startY), image.Black, image.ZP, draw.Over)
 		log.Println(glyphWidth, glyphHeight, startY)
 
+		var characterImage draw.Image
+
+		if *outputFormat == outputFormatC {
+			characterImage = image.NewRGBA(image.Rect(0, 0, advanceHeight, advanceHeight))
+			context.SetClip(characterImage.Bounds())
+			context.SetDst(characterImage)
+		}
+
 		context.DrawString(string(char), point)
 
-		if i%rowSize == 0 {
-			// new row
-			point.X = 0
-			point.Y += fixed.I(charHeight)
-		} else {
-			// new column
-			point.X += fixed.I(charWidth)
+		if *outputFormat == outputFormatC {
+			bounds := characterImage.Bounds()
+
+			topSpace := 0
+			leftSpace := 0
+			bitmapWidth := bounds.Dx()
+			bitmapHeight := bounds.Dy()
+
+			// calculate top space
+			for y := 0; y < bounds.Dy(); y++ {
+				foundNotBlank := false
+				for x := 0; x < bounds.Dx(); x++ {
+					alpha := characterImage.At(x, y).(color.RGBA).A
+					if alpha != 0 {
+						foundNotBlank = true
+						break
+					}
+				}
+
+				if foundNotBlank {
+					break
+				} else {
+					topSpace++
+				}
+			}
+
+			// calculate bottom space
+			for y := bounds.Dy(); y >= 0; y-- {
+				foundNotBlank := false
+				for x := 0; x < bounds.Dx(); x++ {
+					alpha := characterImage.At(x, y).(color.RGBA).A
+					if alpha != 0 {
+						foundNotBlank = true
+						break
+					}
+				}
+
+				if foundNotBlank {
+					break
+				} else {
+					bitmapHeight--
+				}
+			}
+
+			bitmapHeight -= topSpace
+
+			// calculate left space
+			for x := 0; x < bounds.Dx(); x++ {
+				foundNotBlank := false
+				for y := 0; y < bounds.Dy(); y++ {
+					alpha := characterImage.At(x, y).(color.RGBA).A
+					if alpha != 0 {
+						foundNotBlank = true
+						break
+					}
+				}
+
+				if foundNotBlank {
+					break
+				} else {
+					leftSpace++
+				}
+			}
+
+			// calculate right space
+			for x := bounds.Dx(); x >= 0; x-- {
+				foundNotBlank := false
+				for y := 0; y < bounds.Dy(); y++ {
+					alpha := characterImage.At(x, y).(color.RGBA).A
+					if alpha != 0 {
+						foundNotBlank = true
+						break
+					}
+				}
+
+				if foundNotBlank {
+					break
+				} else {
+					bitmapWidth--
+				}
+			}
+
+			bitmapWidth -= leftSpace
+
+			if bitmapWidth > 0 {
+				// get the bitmap
+				outputData += fmt.Sprintf("\t\t// character: %s\n", string(char))
+				outputData += "\t\t{\n"
+
+				outputData += fmt.Sprintf("\t\t\t.metrics = {%d, %d, %d, %d, %d, %d},\n", leftSpace, topSpace, bitmapWidth, bitmapHeight, advanceWidth, advanceHeight)
+				outputData += "\t\t\t.data = {\n"
+				for y := topSpace; y < topSpace+bitmapHeight; y++ {
+					outputData += "\t\t\t\t"
+					for x := leftSpace; x < leftSpace+bitmapWidth; x++ {
+						color := characterImage.At(x, y).(color.RGBA)
+						if x != leftSpace {
+							outputData += ", "
+						}
+						outputData += fmt.Sprintf("0x%x", color.A)
+					}
+					outputData += ",\n"
+				}
+				outputData += "\t\t\t}\n"
+				outputData += "\t\t}"
+				if i != int(endChar-startChar)+1 {
+					outputData += ",\n"
+				}
+				outputData += "\n"
+
+				log.Printf("%d box: (%d, %d, %d, %d)", char, leftSpace, topSpace, bitmapWidth, bitmapHeight)
+			} else {
+				log.Printf("%d skip", char)
+			}
+		}
+
+		if *outputFormat != outputFormatC {
+			if i%rowSize == 0 {
+				// new row
+				point.X = 0
+				point.Y += fixed.I(charHeight)
+			} else {
+				// new column
+				point.X += fixed.I(charWidth)
+			}
 		}
 	}
 
@@ -117,19 +268,30 @@ func main() {
 		glyphs = append(glyphs, int(k))
 	}
 	sort.Ints(glyphs)
-	for _, glyph := range glyphs {
-		currentGlyphMetrics := glyphMetrics[rune(glyph)]
-		fmt.Printf("{%d, CharMetrics{%d, %d}},\n", glyph, currentGlyphMetrics.AdvanceWidth, currentGlyphMetrics.AdvanceHeight)
-	}
 
-	outputFile, err := os.Create("atlas.png")
-	if err != nil {
-		panic(err)
-	}
-	defer outputFile.Close()
+	if *outputFormat == outputFormatPNG {
+		for _, glyph := range glyphs {
+			currentGlyphMetrics := glyphMetrics[rune(glyph)]
+			fmt.Printf("{%d, CharMetrics{%d, %d}},\n", glyph, currentGlyphMetrics.AdvanceWidth, currentGlyphMetrics.AdvanceHeight)
+		}
 
-	err = png.Encode(outputFile, atlasImage)
-	if err != nil {
-		panic(err)
+		outputFile, err := os.Create("atlas.png")
+		if err != nil {
+			panic(err)
+		}
+		defer outputFile.Close()
+
+		err = png.Encode(outputFile, atlasImage)
+		if err != nil {
+			panic(err)
+		}
+	} else if *outputFormat == outputFormatC {
+		outputData += "\t}\n"
+		outputData += "};\n"
+
+		err = ioutil.WriteFile("atlas.c", []byte(outputData), 0777)
+		if err != nil {
+			panic(err)
+		}
 	}
 }
