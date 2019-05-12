@@ -120,16 +120,31 @@ func main() {
 
 		// draw.Draw(atlasImage, image.Rect(point.X.Floor(), startY-glyphHeight, point.X.Floor()+glyphWidth, startY), image.Black, image.ZP, draw.Over)
 		log.Println(glyphWidth, glyphHeight, startY)
+		log.Println(char, glyphBounds.Max.X.Ceil(), glyphBounds.Max.Y.Ceil())
 
 		var characterImage draw.Image
 
 		if *outputFormat == outputFormatC {
-			characterImage = image.NewRGBA(image.Rect(0, 0, advanceHeight, advanceHeight))
+			characterImage = image.NewRGBA(image.Rect(0, 0, advanceWidth, startY))
 			context.SetClip(characterImage.Bounds())
 			context.SetDst(characterImage)
 		}
 
 		context.DrawString(string(char), point)
+
+		if *outputFormat == outputFormatC {
+			outputFile, err := os.Create("debug/" + strconv.Itoa(int(char)) + ".png")
+			if err != nil {
+				panic(err)
+			}
+
+			err = png.Encode(outputFile, characterImage)
+			if err != nil {
+				panic(err)
+			}
+
+			outputFile.Close()
+		}
 
 		if *outputFormat == outputFormatC {
 			bounds := characterImage.Bounds()
@@ -158,7 +173,7 @@ func main() {
 			}
 
 			// calculate bottom space
-			for y := bounds.Dy(); y >= 0; y-- {
+			for y := bounds.Dy() - 1; y >= 0; y-- {
 				foundNotBlank := false
 				for x := 0; x < bounds.Dx(); x++ {
 					alpha := characterImage.At(x, y).(color.RGBA).A
@@ -196,7 +211,7 @@ func main() {
 			}
 
 			// calculate right space
-			for x := bounds.Dx(); x >= 0; x-- {
+			for x := bounds.Dx() - 1; x >= 0; x-- {
 				foundNotBlank := false
 				for y := 0; y < bounds.Dy(); y++ {
 					alpha := characterImage.At(x, y).(color.RGBA).A
@@ -215,19 +230,19 @@ func main() {
 
 			bitmapWidth -= leftSpace
 
+			charString := string(char)
+			if charString == "\\" {
+				charString = "backslash"
+			}
+			outputData += fmt.Sprintf("\t\t// character: %s\n", charString)
+
+			if i != 1 {
+				indexData += ", "
+			}
+			indexData += strconv.Itoa(currentIndex)
+
 			if bitmapWidth > 0 {
 				// get the bitmap
-				charString := string(char)
-				if charString == "\\" {
-					charString = "backslash"
-				}
-				outputData += fmt.Sprintf("\t\t// character: %s\n", charString)
-
-				if i != 1 {
-					indexData += ", "
-				}
-				indexData += strconv.Itoa(currentIndex)
-
 				outputData += fmt.Sprintf("\t\t%d, %d, %d, %d, %d, %d,\n", leftSpace, topSpace, bitmapWidth, bitmapHeight, advanceWidth, advanceHeight)
 				currentIndex += 6
 
@@ -243,13 +258,16 @@ func main() {
 					}
 					outputData += ",\n"
 				}
-				if i != int(endChar-startChar)+1 {
-					outputData += "\n"
-				}
 
 				log.Printf("%d box: (%d, %d, %d, %d)", char, leftSpace, topSpace, bitmapWidth, bitmapHeight)
 			} else {
 				log.Printf("%d skip", char)
+				outputData += fmt.Sprintf("\t\t0, 0, 0, 0, 0, 0,\n")
+				currentIndex += 6
+			}
+
+			if i != int(endChar-startChar)+1 {
+				outputData += "\n"
 			}
 		}
 
